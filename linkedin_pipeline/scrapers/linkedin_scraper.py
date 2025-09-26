@@ -1,7 +1,5 @@
-"""
-LinkedIn Job Scraper - Stable Version
-Handles public LinkedIn job listings without authentication
-"""
+"""LinkedIn Job Scraper - Stable Version
+Handles public LinkedIn job listings without authentication"""
 
 import requests
 from bs4 import BeautifulSoup
@@ -10,56 +8,69 @@ import time
 import random
 from datetime import datetime
 import logging
+import os
 
 class LinkedInScraper:
-    def __init__(self, config_path='../config/settings.json'):
-        with open(config_path, 'r') as f:
+    def __init__(self, config_path=None):
+        # Auto-detect config path
+        if config_path is None:
+            if os.path.exists("config/settings.json"):
+                config_path = "config/settings.json"
+            elif os.path.exists("../config/settings.json"):
+                config_path = "../config/settings.json"
+            else:
+                raise FileNotFoundError("Could not find config/settings.json")
+        
+        with open(config_path, "r") as f:
             self.config = json.load(f)
         
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': self.config['browser']['user_agent'],
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
+            "User-Agent": self.config["browser"]["user_agent"],
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1"
         })
         
-        # Setup logging
+        # Setup logging - auto-detect logs directory
+        log_dir = "logs" if os.path.exists("logs") or not os.path.exists("../logs") else "../logs"
+        os.makedirs(log_dir, exist_ok=True)
+        
         logging.basicConfig(
-            filename='../logs/scraper.log',
+            filename=f"{log_dir}/scraper.log",
             level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s'
+            format="%(asctime)s - %(levelname)s - %(message)s"
         )
         self.logger = logging.getLogger(__name__)
     
     def build_search_url(self, query, location, time_filter=None):
         """Build LinkedIn search URL with parameters"""
-        base_url = 'https://www.linkedin.com/jobs/search/'
+        base_url = "https://www.linkedin.com/jobs/search/"
         
         # Time filters
         time_params = {
-            '24h': 'r86400',
-            'week': 'r604800',
-            'month': 'r2592000'
+            "24h": "r86400",
+            "week": "r604800",
+            "month": "r2592000"
         }
         
         params = {
-            'keywords': query,
-            'location': location,
-            'trk': 'public_jobs_jobs-search-bar_search-submit',
-            'position': 1,
-            'pageNum': 0
+            "keywords": query,
+            "location": location,
+            "trk": "public_jobs_jobs-search-bar_search-submit",
+            "position": 1,
+            "pageNum": 0
         }
         
         # Add time filter if specified
         if time_filter and time_filter in time_params:
-            params['f_TPR'] = time_params[time_filter]
+            params["f_TPR"] = time_params[time_filter]
         
         # Build URL
-        url = base_url + '?'
-        url += '&'.join([f"{k}={v}" for k, v in params.items()])
+        url = base_url + "?"
+        url += "&".join([f"{k}={v}" for k, v in params.items()])
         
         # Add cache buster
         url += f"&refresh={random.randint(1000, 9999)}"
@@ -68,9 +79,9 @@ class LinkedInScraper:
     
     def scrape_jobs(self, query=None, location=None, time_filter=None):
         """Main scraping function"""
-        query = query or self.config['search_settings']['default_query']
-        location = location or self.config['search_settings']['location']
-        time_filter = time_filter or self.config['search_settings']['time_filter']
+        query = query or self.config["search_settings"]["default_query"]
+        location = location or self.config["search_settings"]["location"]
+        time_filter = time_filter or self.config["search_settings"]["time_filter"]
         
         url = self.build_search_url(query, location, time_filter)
         self.logger.info(f"Scraping: {url}")
@@ -83,21 +94,21 @@ class LinkedInScraper:
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             
-            soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(response.text, "html.parser")
             
             # Try multiple selectors for job cards
-            job_cards = soup.find_all('div', class_='base-card')
+            job_cards = soup.find_all("div", class_="base-card")
             if not job_cards:
-                job_cards = soup.find_all('div', class_='job-search-card')
+                job_cards = soup.find_all("div", class_="job-search-card")
             if not job_cards:
-                job_cards = soup.find_all('li', class_='result-card')
+                job_cards = soup.find_all("li", class_="result-card")
             
             print(f"✅ Found {len(job_cards)} job listings")
             
             jobs = []
-            for card in job_cards[:self.config['search_settings']['max_jobs_per_search']]:
+            for card in job_cards[:self.config["search_settings"]["max_jobs_per_search"]]:
                 job = self.extract_job_info(card)
-                if job and job.get('url'):
+                if job and job.get("url"):
                     jobs.append(job)
                     print(f"  ✓ {job['title'][:50]}... at {job['company']}")
             
@@ -120,54 +131,54 @@ class LinkedInScraper:
             job = {}
             
             # Title
-            title_elem = card.find('h3', class_='base-search-card__title')
+            title_elem = card.find("h3", class_="base-search-card__title")
             if not title_elem:
-                title_elem = card.find('h3', class_='job-search-card__title')
-            job['title'] = title_elem.text.strip() if title_elem else 'Unknown Title'
+                title_elem = card.find("h3", class_="job-search-card__title")
+            job['title'] = title_elem.text.strip() if title_elem else "Unknown Title"
             
             # Company
-            company_elem = card.find('h4', class_='base-search-card__subtitle')
+            company_elem = card.find("h4", class_="base-search-card__subtitle")
             if not company_elem:
-                company_elem = card.find('a', class_='hidden-nested-link')
-            job['company'] = company_elem.text.strip() if company_elem else 'Unknown Company'
+                company_elem = card.find("a", class_="hidden-nested-link")
+            job['company'] = company_elem.text.strip() if company_elem else "Unknown Company"
             
             # Location
-            location_elem = card.find('span', class_='job-search-card__location')
+            location_elem = card.find("span", class_="job-search-card__location")
             if not location_elem:
-                location_elem = card.find('span', class_='job-result-card__location')
-            job['location'] = location_elem.text.strip() if location_elem else 'Unknown Location'
+                location_elem = card.find("span", class_="job-result-card__location")
+            job["location"] = location_elem.text.strip() if location_elem else "Unknown Location"
             
             # URL
-            link_elem = card.find('a', class_='base-card__full-link')
+            link_elem = card.find("a", class_="base-card__full-link")
             if not link_elem:
-                link_elem = card.find('a', href=True)
+                link_elem = card.find("a", href=True)
             
-            if link_elem and link_elem.get('href'):
-                job['url'] = link_elem['href']
+            if link_elem and link_elem.get("href"):
+                job['url'] = link_elem["href"]
                 # Clean up URL
-                if job['url'].startswith('/'):
-                    job['url'] = 'https://www.linkedin.com' + job['url']
+                if job['url'].startswith("/"):
+                    job['url'] = "https://www.linkedin.com" + job['url']
                 # Remove tracking parameters
-                if '?' in job['url']:
-                    job['url'] = job['url'].split('?')[0]
+                if "?" in job['url']:
+                    job['url'] = job['url'].split("?")[0]
             else:
                 return None
             
             # Posted time
-            time_elem = card.find('time')
+            time_elem = card.find("time")
             if time_elem:
-                job['posted'] = time_elem.get('datetime', 'Unknown')
+                job["posted"] = time_elem.get("datetime", "Unknown")
             else:
-                time_elem = card.find('span', class_='job-search-card__listdate')
-                job['posted'] = time_elem.text.strip() if time_elem else 'Unknown'
+                time_elem = card.find("span", class_="job-search-card__listdate")
+                job["posted"] = time_elem.text.strip() if time_elem else "Unknown"
             
             # Job ID from URL
             import re
-            job_id_match = re.search(r'/view/(\d+)', job.get('url', ''))
-            job['job_id'] = job_id_match.group(1) if job_id_match else None
+            job_id_match = re.search(r"/view/(\d+)", job.get("url", ""))
+            job["job_id"] = job_id_match.group(1) if job_id_match else None
             
-            job['scraped_at'] = datetime.now().isoformat()
-            job['source'] = 'linkedin'
+            job["scraped_at"] = datetime.now().isoformat()
+            job["source"] = "linkedin"
             
             return job
             
@@ -180,14 +191,18 @@ class LinkedInScraper:
         if not jobs:
             return
         
-        filename = f"../data/linkedin_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, 'w') as f:
+        # Auto-detect data directory
+        data_dir = "data" if os.path.exists("data") or not os.path.exists("../data") else "../data"
+        os.makedirs(data_dir, exist_ok=True)
+        
+        filename = f"{data_dir}/linkedin_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(filename, "w") as f:
             json.dump(jobs, f, indent=2)
         
         print(f"\n💾 Saved {len(jobs)} jobs to {filename}")
         self.logger.info(f"Saved {len(jobs)} jobs to {filename}")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     scraper = LinkedInScraper()
     jobs = scraper.scrape_jobs()
     print(f"\nTotal jobs scraped: {len(jobs)}")
