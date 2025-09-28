@@ -44,9 +44,73 @@ class AIJobAnalyzer:
 
         print('✅ AI Analyzer initialized with Claude API access to profile data established.')
 
-    def analyze_job_fit(self, job_data: Dict) -> Dict:
-        """Analyze how well a job matches the candidate profile"""
+    def _calculate_user_experience(self):
+        """Calculate total years of experience from profile"""
+        total_years = 0
+        for exp in self.profile.get('experience', []):
+            # Parse duration like "2023-2024" or similar
+            duration = exp.get('duration', '')
+            if '-' in duration:
+                try:
+                    start, end = duration.split('-')
+                    start_year = int(start)
+                    end_year = int(end) if end != 'present' else 2025
+                    total_years += (end_year - start_year)
+                except:
+                    pass
+        return total_years
+    
+    def pre_qualify_job(self, job_data, enrichment_result):
+        """Check if candidate meets hard requirements before analysis"""
+        disqualifiers = []
+        warnings = []
         
+        # Check degree requirement
+        job_degree = enrichment_result.get('degree_requirement')
+        if job_degree:
+            user_degree = self.profile.get('education', [{}])[0].get('level', 'bachelors')
+            
+            degree_hierarchy = {'bachelors': 1, 'masters': 2, 'phd': 3}
+            
+            if job_degree in degree_hierarchy and user_degree in degree_hierarchy:
+                if degree_hierarchy[job_degree] > degree_hierarchy[user_degree]:
+                    disqualifiers.append(f"Requires {job_degree}, you have {user_degree}")
+        
+        # Check experience requirement
+        job_exp_years = enrichment_result.get('experience_years')
+        if job_exp_years:
+            user_exp_years = self._calculate_user_experience()
+            if user_exp_years < job_exp_years:
+                disqualifiers.append(f"Requires {job_exp_years} years experience, you have {user_exp_years}")
+        
+        # Check language requirements
+        if enrichment_result.get('language') == 'dutch':
+            if 'Dutch' not in self.profile.get('languages', []):
+                warnings.append("Job description primarily in Dutch - may require Dutch fluency")
+        
+        return {
+            'qualified': len(disqualifiers) == 0,
+            'disqualifiers': disqualifiers,
+            'warnings': warnings
+        }
+    
+    def analyze_job_fit(self, job_data: Dict, enrichment_result: Dict = None) -> Dict:
+        """Analyze how well a job matches the candidate profile"""
+            # Pre-qualify first
+        if enrichment_result:
+            qualification = self.pre_qualify_job(job_data, enrichment_result)
+            
+            if not qualification['qualified']:
+                # Return low score with clear explanation
+                return {
+                    'score': 20,  # Low score for disqualified jobs
+                    'strengths': ['Your technical skills may be relevant'],
+                    'concerns': qualification['disqualifiers'],
+                    'fit_assessment': f"This role has requirements you don't currently meet: {', '.join(qualification['disqualifiers'])}",
+                    'recommendation': "Do not apply unless you can address the requirement gaps",
+                    'disqualified': True,
+                    'disqualifiers': qualification['disqualifiers']
+                }
         job_title = job_data.get('title', 'Unknown')
         company = job_data.get('company', 'Unknown')
         description = job_data.get('description', '')

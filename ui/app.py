@@ -19,6 +19,15 @@ from analyzers.analyzer_ai import AIJobAnalyzer
 from scrapers.linkedin_scraper import LinkedInScraper
 from scrapers.smart_description_enricher import SmartDescriptionEnricher
 
+def apply_with_feedback(db, job_id):
+    """Apply to job with visual feedback"""
+    with st.spinner("Submitting application..."):
+        db.conn.execute("UPDATE jobs SET status = 'applied', applied_at = ? WHERE id = ?", 
+                       (datetime.now().isoformat(), job_id))
+        db.conn.commit()
+        st.success("✅ Applied successfully!")
+        st.balloons()
+        
 st.set_page_config(
     page_title="AI Job Search Platform", 
     layout="wide",
@@ -45,6 +54,33 @@ enricher = components['enricher']
 # Custom CSS for better UI
 st.markdown("""
 <style>
+     /* Dark mode colors */
+    :root {
+        --bg-primary: #0f172a;
+        --bg-secondary: #1e293b;
+        --text-primary: #f1f5f9;
+        --text-secondary: #94a3b8;
+    }
+    
+    /* Typography improvements */
+    h2 { margin-bottom: 0.5rem !important; }
+    h3 { margin-top: 1.5rem !important; }
+    
+    /* Better buttons */
+    div[data-testid="stButton"] button {
+        transition: all 0.2s ease;
+    }
+    
+    div[data-testid="stButton"] button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    
+    /* Mobile responsive */
+    @media (max-width: 768px) {
+        .stColumns { flex-direction: column !important; }
+    }
+    
     .job-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1.5rem;
@@ -73,116 +109,75 @@ st.markdown("""
         color: white;
         font-weight: bold;
     }
+     .job-title {
+        font-size: 1.5rem;
+        font-weight: 600;
+        line-height: 1.2;
+        margin-bottom: 0.5rem;
+    }
+    
+    .company-name {
+        font-size: 1.1rem;
+        color: #94a3b8;
+        margin-bottom: 1rem;
+    }
+    
+    /* Button Hierarchy (Primary/Secondary/Tertiary) */
+    .btn-primary {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        font-weight: 600;
+        padding: 12px 24px;
+        border: none;
+        box-shadow: 0 4px 14px 0 rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-secondary {
+        background: transparent;
+        border: 2px solid #667eea;
+        color: #667eea;
+        padding: 10px 20px;
+    }
+    
+    /* Score Badge Redesign */
+    .score-badge {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        font-size: 2rem;
+        font-weight: 700;
+    }
+    
+    .score-high { color: #10b981; }
+    .score-medium { color: #f59e0b; }
+    .score-low { color: #ef4444; }
 </style>
 """, unsafe_allow_html=True)
 
 # Sidebar - Control Center
 with st.sidebar:
-    st.title("🎯 Control Center")
-    
-    # Job Search Section
-    st.header("📍 Job Search")
-    
-    # Search terms input
-    default_terms = "Python Developer\nMachine Learning Engineer\nData Scientist\nSoftware Engineer"
-    search_terms = st.text_area(
-        "Search Terms (one per line)", 
-        value=st.session_state.get('search_terms', default_terms),
-        height=100,
-        help="Enter job titles to search for"
-    )
-    
-    location = st.text_input("Location", value="Netherlands")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🔍 Scrape Jobs", use_container_width=True):
-            with st.spinner("Scraping jobs..."):
-                terms = [t.strip() for t in search_terms.split('\n') if t.strip()]
-                total_jobs = 0
-                new_jobs = 0
-                
-                progress_bar = st.progress(0)
-                for i, term in enumerate(terms):
-                    st.info(f"Searching for: {term}")
-                    jobs = scraper.scrape_jobs(term, location)
-                    
-                    for job in jobs:
-                        # Check if job already exists
-                        if not db.job_exists(job['url']):
-                            db.add_job(job)
-                            new_jobs += 1
-                        total_jobs += 1
-                    
-                    progress_bar.progress((i + 1) / len(terms))
-                
-                st.success(f"✅ Found {total_jobs} jobs, added {new_jobs} new ones!")
-    
-    with col2:
-        if st.button("🧹 Clear Database", use_container_width=True):
-            if st.checkbox("Confirm deletion"):
-                db.conn.execute("DELETE FROM jobs")
-                db.conn.commit()
-                st.success("Database cleared!")
-    
-    # AI Assistant Section
-    st.header("🤖 AI Assistant")
-    
-    if st.button("💡 Suggest Search Terms", use_container_width=True):
-        with st.spinner("Analyzing your profile..."):
-            # Use Claude to suggest search terms
-            suggested = analyzer.suggest_search_terms()
-            st.session_state['search_terms'] = '\n'.join(suggested)
-            st.rerun()
-    
-    if st.button("🔄 Enrich Descriptions", use_container_width=True):
-        with st.spinner("Fetching full descriptions..."):
-            # Use the new method to only get jobs needing descriptions
-            jobs_needing_desc = db.get_jobs_needing_description(20)
-            
-            enriched_count = 0
-            for job in jobs_needing_desc:
-                desc = enricher.fetch_with_retry(job['url'])
-                if desc and len(desc) > 100:
-                    db.update_job_description(job['id'], desc)
-                    enriched_count += 1
-            
-            st.success(f"Enriched {enriched_count} job descriptions!")
-    
-    if st.button("🧠 Analyze All Jobs", use_container_width=True):
-        with st.spinner("Analyzing with Claude..."):
-            jobs = db.get_jobs_for_analysis()
-            for job in jobs:
-                analysis = analyzer.analyze_job_fit(job)
-                db.update_analysis(job['id'], analysis)
-            st.success(f"Analyzed {len(jobs)} jobs!")
-    
-    # Enhanced Statistics Section
-    st.header("📊 Enhanced Statistics")
+    st.title("🎯 Job Search")
     stats = db.get_statistics()
-
-    # Overview metrics
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Jobs", stats['total'])
-    col2.metric("Applied", stats['applied'])
-    col3.metric("High Matches", stats['high_matches'])
-
-    # Progress bars
-    st.caption("Data Completeness")
-    enrichment_pct = (stats['enriched'] / stats['total'] * 100) if stats['total'] > 0 else 0
-    st.progress(enrichment_pct / 100)
-    st.caption(f"Enriched: {stats['enriched']}/{stats['total']} ({enrichment_pct:.1f}%)")
-
-    analysis_pct = (stats['analyzed'] / stats['total'] * 100) if stats['total'] > 0 else 0
-    st.progress(analysis_pct / 100)
-    st.caption(f"Analyzed: {stats['analyzed']}/{stats['total']} ({analysis_pct:.1f}%)")
-
-    # Action needed
-    if stats['need_enrichment'] > 0:
-        st.warning(f"📝 {stats['need_enrichment']} jobs need description enrichment")
-    if stats['need_analysis'] > 0:
-        st.info(f"🧠 {stats['need_analysis']} jobs ready for analysis")
+    # Progressive Disclosure - Show only essential controls
+    with st.expander("Search Settings", expanded=True):
+        search_terms = st.text_area("Keywords", value="Python Developer", height=60)
+        location = st.text_input("Location", value="Netherlands")
         
+        col1, col2 = st.columns(2)
+        with col1:
+            st.button("🔍 Search", type="primary", use_container_width=True)
+        with col2:
+            st.button("🎲 AI Suggest", use_container_width=True)
+    
+    # Status at a glance
+    st.metric("Ready to Apply", f"{stats['high_matches']}")
+    st.metric("Total Reviewed", f"{stats['analyzed']}/{stats['total']}")
+    
+    # Advanced options hidden
+    with st.expander("Advanced Actions"):
+        st.button("🔄 Enrich Descriptions")
+        st.button("🧠 Analyze All")
+        st.button("🗑️ Clear Database")        
 # Main Content Area
 st.title("🚀 AI Job Search Platform")
 
@@ -211,44 +206,71 @@ with tab1:
     # Get filtered jobs
     jobs = db.get_jobs_by_score(min_score)
     
-    if jobs:
+    
+    if not jobs:
+        st.markdown("""
+            <div style='text-align: center; padding: 4rem; background: #1e293b; border-radius: 12px;'>
+                <h2>🔍 No matches found</h2>
+                <p style='color: #94a3b8; margin: 1rem 0;'>
+                    No jobs match your criteria yet. Try:
+                </p>
+                <ul style='text-align: left; display: inline-block;'>
+                    <li>Lowering the minimum score filter</li>
+                    <li>Scraping new jobs with different search terms</li>
+                    <li>Running "Analyze All Jobs" to score unanalyzed positions</li>
+                </ul>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
         for job in jobs:
             with st.container():
                 col1, col2 = st.columns([4, 1])
                 
                 with col1:
-                    # Job title and company
-                    st.markdown(f"### {job['title']}")
-                    st.markdown(f"**{job['company']}** | 📍 {job['location']}")
+                    # Enhanced title and company display
+                    st.markdown(f"<h2 style='margin-bottom: 0.5rem; font-size: 1.8rem;'>{job['title']}</h2>", unsafe_allow_html=True)
+                    st.markdown(f"<p style='color: #94a3b8; font-size: 1.1rem; margin-bottom: 1rem;'>{job['company']} • 📍 {job['location']}</p>", unsafe_allow_html=True)
                     
-                    # Score badge
+                    # Score badge with better styling
                     score = job['ai_score']
                     if score >= 85:
-                        st.markdown(f'<span class="score-high">Match Score: {score}/100</span>', unsafe_allow_html=True)
+                        st.markdown(f'<span class="score-high" style="font-size: 1.5rem; font-weight: 700;">Match Score: {score}/100</span>', unsafe_allow_html=True)
                     elif score >= 75:
-                        st.markdown(f'<span class="score-medium">Match Score: {score}/100</span>', unsafe_allow_html=True)
+                        st.markdown(f'<span class="score-medium" style="font-size: 1.5rem; font-weight: 700;">Match Score: {score}/100</span>', unsafe_allow_html=True)
                     else:
-                        st.markdown(f'<span class="score-low">Match Score: {score}/100</span>', unsafe_allow_html=True)
+                        st.markdown(f'<span class="score-low" style="font-size: 1.5rem; font-weight: 700;">Match Score: {score}/100</span>', unsafe_allow_html=True)
                     
-                    # Strengths and Concerns in columns
+                    # Disqualification check (keep your existing logic)
+                    if job.get('disqualified'):
+                        reasons = job.get('disqualification_reasons', '')
+                        if isinstance(reasons, str) and reasons:
+                            reasons = json.loads(reasons) if reasons.startswith('[') else [reasons]
+                        elif isinstance(reasons, list):
+                            pass
+                        else:
+                            reasons = ['Requirements not met']
+                        
+                        st.error("⛔ **You don't qualify for this position:**")
+                        for reason in reasons:
+                            st.write(f"   • {reason}")
+                    
+                    # Strengths and Concerns - cleaner layout
                     if job['ai_strengths'] or job['ai_concerns']:
                         str_col, con_col = st.columns(2)
                         
                         with str_col:
-                            st.markdown("**✅ Strengths:**")
+                            st.success("💪 **Top Strengths**")
                             strengths = json.loads(job['ai_strengths'] or '[]')
-                            for s in strengths[:3]:
-                                st.markdown(f"• {s}")
+                            for s in strengths[:2]:  # Show only top 2
+                                st.markdown(f"✓ {s}")
                         
                         with con_col:
-                            st.markdown("**⚠️ Concerns:**")
+                            st.warning("⚠️ **Key Concerns**")
                             concerns = json.loads(job['ai_concerns'] or '[]')
-                            for c in concerns[:2]:
+                            for c in concerns[:2]:  # Show only top 2
                                 st.markdown(f"• {c}")
                     
-                    # Fit Assessment
-                    
-                    
+                    # Detailed Analysis expandable
                     if job['ai_fit_assessment']:
                         with st.expander("📝 Detailed Analysis"):
                             st.write("**Why this is a match:**")
@@ -261,14 +283,21 @@ with tab1:
                 with col2:
                     st.markdown("### Actions")
                     
-                    if st.button("👁️ View", key=f"view_{job['id']}", use_container_width=True):
-                        st.session_state[f'show_job_{job["id"]}'] = True
+                    # Primary Action - Apply Now
+                    if job.get('application_link'):
+                        st.link_button("🚀 Apply Now", job['application_link'], use_container_width=True, type="primary")
+                    else:
+                        if st.button("✅ Apply", key=f"apply_{job['id']}", use_container_width=True, type="primary"):
+                            db.conn.execute("UPDATE jobs SET status = 'applied', applied_at = ? WHERE id = ?", 
+                                        (datetime.now().isoformat(), job['id']))
+                            db.conn.commit()
+                            st.success("Marked as applied!")
+                            st.balloons()
                     
-                    # Cover Letter Button
+                    # Cover Letter Generation
                     cover_key = f"cover_btn_{job['id']}"
                     if st.button("📝 Cover Letter", key=cover_key, use_container_width=True):
                         with st.spinner("Generating personalized cover letter..."):
-                            # Build complete analysis from database
                             analysis = {
                                 'score': job.get('ai_score', 0),
                                 'strengths': json.loads(job.get('ai_strengths', '[]')),
@@ -277,10 +306,8 @@ with tab1:
                                 'recommendation': job.get('ai_recommendation', '')
                             }
                             
-                            # Generate cover letter
                             cover = analyzer.generate_cover_letter(job, analysis)
                             
-                            # Display immediately below the button
                             st.text_area(
                                 "Generated Cover Letter",
                                 value=cover,
@@ -288,47 +315,43 @@ with tab1:
                                 key=f"cover_display_{job['id']}"
                             )
                             
-                            # Add download button for the cover letter
                             st.download_button(
-                                label="📥 Download Cover Letter",
+                                label="📥 Download",
                                 data=cover,
                                 file_name=f"cover_letter_{job['company']}_{job['title'].replace(' ', '_')}.txt",
                                 mime="text/plain",
                                 key=f"download_{job['id']}"
                             )
                     
-                    if st.button("✅ Apply", key=f"apply_{job['id']}", use_container_width=True):
-                        db.conn.execute("UPDATE jobs SET status = 'applied', applied_at = ? WHERE id = ?", 
-                                    (datetime.now().isoformat(), job['id']))
-                        db.conn.commit()
-                        st.success("Marked as applied!")
-                    
-                    if st.button("❌ Skip", key=f"skip_{job['id']}", use_container_width=True):
-                        db.conn.execute("UPDATE jobs SET status = 'skipped' WHERE id = ?", (job['id'],))
-                        db.conn.commit()
-                        st.rerun()
-                    
+                    # Secondary Actions
                     st.link_button("🔗 Open Job", job['url'], use_container_width=True)
                     
-                    # Direct Apply Button - NEW
-                    if job.get('application_link'):
-                        st.link_button("🚀 Apply Now", job['application_link'], use_container_width=True)
-                    else:
+                    # Get Apply Link if not available
+                    if not job.get('application_link'):
                         if st.button("🔗 Get Apply Link", key=f"getlink_{job['id']}", use_container_width=True):
                             with st.spinner("Fetching apply link..."):
                                 apply_link = enricher.get_apply_link(job['url'])
                                 db.update_apply_link(job['id'], apply_link)
                                 st.rerun()
-                # Show cover letter if generated
+                    
+                    # Tertiary Actions in expander
+                    with st.expander("More Options"):
+                        if st.button("👁️ View Details", key=f"view_{job['id']}", use_container_width=True):
+                            st.session_state[f'show_job_{job["id"]}'] = True
+                        
+                        if st.button("❌ Not Interested", key=f"skip_{job['id']}", use_container_width=True):
+                            db.conn.execute("UPDATE jobs SET status = 'skipped' WHERE id = ?", (job['id'],))
+                            db.conn.commit()
+                            st.rerun()
+                
+                # Show cover letter if it's in session state
                 if st.session_state.get(f'cover_{job["id"]}'):
                     st.text_area("Generated Cover Letter", 
-                               st.session_state[f'cover_{job["id"]}'], 
-                               height=300)
+                            st.session_state[f'cover_{job["id"]}'], 
+                            height=300)
                 
                 st.divider()
-    else:
-        st.info("No jobs found matching your criteria. Try adjusting filters or scraping new jobs.")
-
+  
 with tab2:
     st.header("All Jobs Database")
     
