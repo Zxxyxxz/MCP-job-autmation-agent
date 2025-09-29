@@ -1,18 +1,22 @@
 # ui/app.py - Complete Enhanced Version
-import streamlit as st
+# Fix paths
 import sys
 import os
 import json
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
+sys.path.insert(0, os.path.join(parent_dir, 'src'))
+import streamlit as st
+
 from datetime import datetime
 import pandas as pd
 import time
 from netherlands_map import create_job_map
 from streamlit_folium import st_folium
-# Fix paths
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.insert(0, parent_dir)
-sys.path.insert(0, os.path.join(parent_dir, 'src'))
+from background_analyzer import BackgroundAnalyzer
+from scrapers.apply_link_extractor import ApplyLinkExtractor
+
 
 from database.enhanced_database import JobDatabase
 from analyzers.analyzer_ai import AIJobAnalyzer
@@ -44,6 +48,10 @@ def init_components():
         'scraper': LinkedInScraper(),
         'enricher': SmartDescriptionEnricher()
     }
+
+# Cache the extractor to avoid recreating
+def get_apply_extractor():
+    return ApplyLinkExtractor()
 
 components = init_components()
 db = components['db']
@@ -158,26 +166,103 @@ st.markdown("""
 with st.sidebar:
     st.title("🎯 Job Search")
     stats = db.get_statistics()
-    # Progressive Disclosure - Show only essential controls
-    with st.expander("Search Settings", expanded=True):
-        search_terms = st.text_area("Keywords", value="Python Developer", height=60)
-        location = st.text_input("Location", value="Netherlands")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.button("🔍 Search", type="primary", use_container_width=True)
-        with col2:
-            st.button("🎲 AI Suggest", use_container_width=True)
     
-    # Status at a glance
+    # Define these OUTSIDE the expander
+    search_terms = st.text_area("Keywords", value="Python Developer", height=60)
+    location = st.text_input("Location", value="Netherlands")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔍 Search", use_container_width=True):
+            with st.spinner("Scraping..."):
+                terms = [t.strip() for t in search_terms.split('\n') if t.strip()]
+                for term in terms:
+                    jobs = scraper.scrape_jobs(term, location)
+                    for job in jobs:
+                        if not db.job_exists(job['url']):
+                            db.add_job(job)
+                st.success("Scraping complete!")
+                st.rerun()
+    
+    with col2:
+        if st.button("🎲 AI Suggest", use_container_width=True):
+            suggested = analyzer.suggest_search_terms()
+            st.session_state['suggested_terms'] = suggested
+            # Format the list properly
+            for i, term in enumerate(suggested):
+                st.write(f"{i+1}. {term}")
+    
+    # Stats display
     st.metric("Ready to Apply", f"{stats['high_matches']}")
     st.metric("Total Reviewed", f"{stats['analyzed']}/{stats['total']}")
     
-    # Advanced options hidden
     with st.expander("Advanced Actions"):
-        st.button("🔄 Enrich Descriptions")
-        st.button("🧠 Analyze All")
-        st.button("🗑️ Clear Database")        
+        if st.button("🔄 Enrich Descriptions"):
+            jobs_to_enrich = db.get_jobs_needing_description(20)
+            if not jobs_to_enrich:
+                st.info("All jobs already enriched!")
+            else:
+                progress = st.progress(0)
+                for i, job in enumerate(jobs_to_enrich):
+                    progress.progress((i+1)/len(jobs_to_enrich))
+                    desc = enricher.fetch_with_retry(job['url'])
+                    if desc:
+                        db.update_job_description(job['id'], desc)
+                st.success(f"Enriched {len(jobs_to_enrich)} jobs!")
+
+        if st.button("🧠 Analyze All"):
+            success, message = BackgroundAnalyzer.analyze_jobs_async(db, analyzer)
+            if success:
+                st.success(message)
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.info(message)
+
+       
+            
+        if st.button("🗑️ Clear Database"):
+            # Use a modal or confirmation dialog instead
+            confirm_key = "confirm_delete"
+            if confirm_key not in st.session_state:
+                st.session_state[confirm_key] = False
+            
+            st.session_state[confirm_key] = True
+            st.warning("⚠️ Are you sure? Click again to confirm deletion.")
+
+        # Check confirmation outside the button
+        if st.session_state.get("confirm_delete", False):
+            if st.button("⚠️ Yes, DELETE ALL", type="secondary"):
+                db.conn.execute("DELETE FROM jobs")
+                db.conn.commit()
+                st.success("Database cleared!")
+                st.session_state["confirm_delete"] = False
+                st.rerun()
+                
+         # Add this right after the sidebar, before the tabs:
+        analysis_status = BackgroundAnalyzer.get_status()
+        if analysis_status['running']:
+            col1, col2, col3 = st.columns([2, 1, 1])
+            
+            with col1:
+                if analysis_status['total'] > 0:
+                    progress = analysis_status['current'] / analysis_status['total']
+                    st.progress(progress)
+                    st.caption(f"Analyzing job {analysis_status['current']} of {analysis_status['total']}")
+            
+            with col2:
+                if analysis_status['start_time']:
+                    elapsed = (datetime.now() - analysis_status['start_time']).seconds
+                    st.metric("Time", f"{elapsed}s")
+            
+            with col3:
+                if st.button("❌ Cancel"):
+                    BackgroundAnalyzer.cancel_analysis()
+                    st.rerun()
+            
+            # Auto-refresh every 2 seconds
+            time.sleep(2)
+            st.rerun()
 # Main Content Area
 st.title("🚀 AI Job Search Platform")
 
@@ -283,16 +368,51 @@ with tab1:
                 with col2:
                     st.markdown("### Actions")
                     
-                    # Primary Action - Apply Now
-                    if job.get('application_link'):
-                        st.link_button("🚀 Apply Now", job['application_link'], use_container_width=True, type="primary")
-                    else:
-                        if st.button("✅ Apply", key=f"apply_{job['id']}", use_container_width=True, type="primary"):
-                            db.conn.execute("UPDATE jobs SET status = 'applied', applied_at = ? WHERE id = ?", 
-                                        (datetime.now().isoformat(), job['id']))
+                    
+
+                    # In your job display section (around line 370):
+                    apply_link = job.get('application_link')
+
+                    if not apply_link:
+                        if st.button("🔍 Get Apply Link", key=f"getlink_{job['id']}", use_container_width=True):
+                            with st.spinner("Checking application method..."):
+                                try:
+                                    extractor = get_apply_extractor()
+                                    result = extractor.get_apply_link(job['url'])
+                                    
+                                    if result:
+                                        db.conn.execute(
+                                            "UPDATE jobs SET application_link = ? WHERE id = ?",
+                                            (result, job['id'])
+                                        )
+                                        db.conn.commit()
+                                        st.success(f"Found: {result[:50] if len(result) > 50 else result}")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.warning("No apply method found for this job")
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                                    print(f"DEBUG Error extracting apply link: {e}")
+
+                    # Display appropriate button based on result (ONLY ONCE!)
+                    if apply_link == "EASY_APPLY":
+                        st.link_button("🚀 Easy Apply", job['url'], use_container_width=True, type="primary")
+                    elif apply_link and apply_link.startswith("http"):
+                        st.link_button("🚀 Apply Now", apply_link, use_container_width=True, type="primary")
+
+                    if apply_link:  # Show mark applied button if we have any apply method (ONLY ONCE!)
+                        if st.button("✅ Mark Applied", key=f"mark_{job['id']}", use_container_width=True):
+                            db.conn.execute(
+                                "UPDATE jobs SET status = 'applied', applied_at = ? WHERE id = ?",
+                                (datetime.now().isoformat(), job['id'])
+                            )
                             db.conn.commit()
                             st.success("Marked as applied!")
-                            st.balloons()
+                            time.sleep(0.5)
+                            st.rerun()
+
+
                     
                     # Cover Letter Generation
                     cover_key = f"cover_btn_{job['id']}"
@@ -326,13 +446,7 @@ with tab1:
                     # Secondary Actions
                     st.link_button("🔗 Open Job", job['url'], use_container_width=True)
                     
-                    # Get Apply Link if not available
-                    if not job.get('application_link'):
-                        if st.button("🔗 Get Apply Link", key=f"getlink_{job['id']}", use_container_width=True):
-                            with st.spinner("Fetching apply link..."):
-                                apply_link = enricher.get_apply_link(job['url'])
-                                db.update_apply_link(job['id'], apply_link)
-                                st.rerun()
+                
                     
                     # Tertiary Actions in expander
                     with st.expander("More Options"):

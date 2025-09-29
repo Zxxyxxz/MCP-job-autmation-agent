@@ -2,6 +2,8 @@ import sqlite3
 from datetime import datetime
 import json
 import threading
+import hashlib
+from urllib.parse import urlparse, parse_qs
 
 class JobDatabase:
     _local = threading.local()
@@ -201,6 +203,98 @@ class JobDatabase:
         ))
         self.conn.commit()
     
+    def clean_url(self, url):
+        """Remove tracking parameters from URL"""
+        parsed = urlparse(url)
+        # Keep only the path and job ID, remove tracking params
+        if 'linkedin.com' in parsed.netloc:
+            # Extract job ID from path
+            job_id = parsed.path.split('/')[-1].split('?')[0]
+            return f"https://www.linkedin.com/jobs/view/{job_id}"
+        return url.split('?')[0]  # Remove all query params for other sites
+
+    def generate_job_hash(self, job_data):
+        """Generate unique hash for job based on key fields"""
+        # Normalize data
+        title = job_data.get('title', '').lower().strip()
+        company = job_data.get('company', '').lower().strip()
+        location = job_data.get('location', '').lower().strip()
+        
+        # Create hash from normalized fields
+        hash_string = f"{title}|{company}|{location}"
+        return hashlib.md5(hash_string.encode()).hexdigest()
+
+    def job_exists_advanced(self, job_data):
+        """Check if job exists using multiple strategies"""
+        
+        # Strategy 1: Clean URL check
+        clean_job_url = self.clean_url(job_data.get('url', ''))
+        cursor = self.conn.execute(
+            "SELECT id FROM jobs WHERE url LIKE ?", 
+            (f"%{clean_job_url.split('/')[-1]}%",)
+        )
+        if cursor.fetchone():
+            return True
+        
+        # Strategy 2: Hash check
+        job_hash = self.generate_job_hash(job_data)
+        cursor = self.conn.execute(
+            "SELECT id FROM jobs WHERE job_hash = ?", 
+            (job_hash,)
+        )
+        if cursor.fetchone():
+            return True
+        
+        # Strategy 3: Exact match on title+company
+        cursor = self.conn.execute(
+            "SELECT id FROM jobs WHERE LOWER(title) = LOWER(?) AND LOWER(company) = LOWER(?)",
+            (job_data['title'], job_data['company'])
+        )
+        if cursor.fetchone():
+            return True
+        
+        # Strategy 4: Similar job posted recently (within 24 hours)
+        cursor = self.conn.execute("""
+            SELECT id FROM jobs 
+            WHERE LOWER(title) = LOWER(?) 
+            AND LOWER(company) = LOWER(?)
+            AND datetime(scraped_at) > datetime('now', '-1 day')
+        """, (job_data['title'], job_data['company']))
+        if cursor.fetchone():
+            return True
+        
+        return False
+
+    def add_job(self, job_data):
+        """Add job with deduplication"""
+        # Check if exists first
+        if self.job_exists_advanced(job_data):
+            return None  # Skip duplicate
+        
+        # Clean URL before storing
+        job_data['url'] = self.clean_url(job_data['url'])
+        job_data['job_hash'] = self.generate_job_hash(job_data)
+        
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO jobs 
+                (title, company, location, url, description, source, scraped_at, job_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                job_data['title'],
+                job_data['company'],
+                job_data.get('location', ''),
+                job_data['url'],
+                job_data.get('description', ''),
+                job_data.get('source', 'linkedin'),
+                datetime.now().isoformat(),
+                job_data['job_hash']
+            ))
+            self.conn.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return None
     def get_jobs_for_analysis(self):
         """Get jobs that need analysis"""
         cursor = self.conn.execute('''

@@ -8,8 +8,26 @@ class LinkedInScraper:
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         }
     
-    def scrape_jobs(self, search_term, location):
-        return self.get_linkedin_public(search_term, location)
+    def scrape_jobs(self, search_term, location="Netherlands"):
+        """Scrape with deduplication"""
+        # First, get the raw jobs from LinkedIn
+        raw_jobs = self.get_linkedin_public(search_term, location)
+        
+        # Then apply deduplication
+        jobs = []
+        seen_jobs = set()
+        
+        for job in raw_jobs:
+            # Create unique identifier
+            job_key = f"{job['title']}|{job['company']}".lower()
+            
+            if job_key not in seen_jobs:
+                seen_jobs.add(job_key)
+                jobs.append(job)
+            else:
+                print(f"Skipping duplicate: {job['title']} at {job['company']}")
+        
+        return jobs
     
     def get_linkedin_public(self, query, location):
         jobs = []
