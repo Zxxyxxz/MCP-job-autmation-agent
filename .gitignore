@@ -27,3 +27,4 @@ logs/
 # Credentials
 config/linkedin_cookies.pkl
 config/settings.json
+CLAUDE.md
